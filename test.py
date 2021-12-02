@@ -7,7 +7,7 @@ from generate import *
 
 def userTest():
     print("正在初始化......")
-    datas = np.load("tang.npz")
+    datas = np.load("tang.npz", allow_pickle=True)
     data = datas['data']
     ix2word = datas['ix2word'].item()
     word2ix = datas['word2ix'].item()
@@ -30,7 +30,7 @@ def userTest():
             print("请输入您想要的诗歌藏头部分，不超过16个字，最好是偶数")
             start_words = str(input())
             gen_poetry = ''.join(gen_acrostic(model, start_words, ix2word, word2ix))
-            print("生成的诗句如下：%s\n" % ("浩歌夜坐生光塘，然余坏竹入袁墙。最爱林泉多往事，喜逢日月共流光。欢讴未暇听雷响，芷壑已惊蛛雁忙。若无一年离世曰，宝莲山中有仙郎。"))
+            print("生成的诗句如下：%s\n" % (gen_poetry))
 
 
 if __name__ == '__main__':

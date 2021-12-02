@@ -17,8 +17,9 @@ def train():
         Config.device = t.device("cpu")
     device = Config.device
     # 获取数据
-    datas = np.load("tang.npz")
+    datas = np.load("tang.npz", allow_pickle=True)
     data = datas['data']
+    print(data)
     ix2word = datas['ix2word'].item()
     word2ix = datas['word2ix'].item()
     data = t.from_numpy(data)
