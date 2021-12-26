@@ -1,72 +1,60 @@
-# pyTorch实现AI写诗
+# AI-Poet
+一款基于深度学习的 AI 作诗系统
 
-### 前言
+**id: 519021910861**
+**name: 徐惠东**
 
-这几天主要在熟悉pyTorch，俗话说：“人生苦短，我用pyTorch”，在从TensorFlow转到pytorch之后，除了“爽”以外，我实在找不到其他形容词，简洁的语法，明了的封装，加上大大降低的debug难度，我从此入了pyTorch的坑。
+（个人单独组队）
 
-为了熟悉pyTorch，我最近做了几个小项目，今天分享给大家的是一个非常有趣的项目——AI写诗。
+## 简介
 
-该项目参考了《pytorch入门与实践》的教程。
+近年来，人工智能渗透了我们生活的方方面面，给我们的衣食住行都带来了不少便利。纵观当今的人工智能在交通管理、环境治理、数字能源和社会治理的应用，无论是推荐系统还是异常检测，他们都在为人们的生存和生活添砖加瓦。
 
+然而，“生活不止眼前的苟且，还有**诗**和远方”。我们有理由相信，当人们的基本生活需求已经满足后，**作诗读诗**将会是人工智能的高层次应用。正如中国在盛唐时期古诗遍地开花，在不久的将来，人工智能写诗也必将掀起一波浪潮。
 
+因此，AI-Poet 参考《Pytorch入门与实践》教程和 [GitLab 上开源代码框架](https://gitee.com/wannabe-9/LSTM_poem1)，采用[**循环神经网络 (RNN) **](https://zh.wikipedia.org/wiki/%E5%BE%AA%E7%8E%AF%E7%A5%9E%E7%BB%8F%E7%BD%91%E7%BB%9C)中的[**长短期记忆 (LSTM) **](https://zh.wikipedia.org/wiki/%E9%95%B7%E7%9F%AD%E6%9C%9F%E8%A8%98%E6%86%B6)模型进行训练，最终效果可以支持**首句续写**和**藏头诗**两种功能，并且实现了基本的音律和意境。
 
-### 先给大家看看效果
+**关键词**
+深度学习  循环神经网络  长短期记忆  预训练模型
 
-#### 第一种模式：给出首句续写全诗
+## 环境配置
 
-> **春江潮水连海平，**海上洲岛自相惊。
-> 日斜漾漾生云色，岸密萧萧带雨青。
-> 野宿参差随鹿啸，春船苇岸接楼船。
-> 时因弟姪逢三岛，共忆东隣一片经。
-> 岚涧寺长僧拾佛，金峰像卷望成经。
-> 渔阳有路喧呼唤，渔饮何由解姓铃。
-> 大盗既穿宾榻弱，相期不管过漳清。
-> 吾君聚月方幽赏，君子无为计与并。
-> 自笑才高兴天子，且终朝谒上公卿。
+最初试图使用 _MacBook Pro 2017_ 进行训练，然而因为是因特尔显卡没办法直接使用 _cuda_，所以只能使用 CPU 导致训练速度极慢。经过粗略计算，跑完一遍模型需要约 15 天时间，因此不在本机跑模型。
 
-#### 第一种模式：写藏头诗
+之后尝试过阿里云租借服务器、百度飞桨平台等，但都觉得过于复杂。最终选用谷歌的 Colab 平台进行训练，所分配到的 GPU 为 _Tesla P100_，训练时间约为 3 小时。
 
-哈哈哈，这个是撩妹专用
+![GPU](./img/GPU.png)
 
-> 浩歌夜坐生光塘，然余坏竹入袁墙。
->
-> 最爱林泉多往事，喜逢日月共流光。
->
-> 欢讴未暇听雷响，芷壑已惊蛛雁忙。
->
-> 若无一年离世曰，宝莲山中有仙郎。
-
-可以看出，神经网络基本学习到了一定的韵律，在意境把握上也比较准确。
-
-
-
-### 前期准备
-
-- core i7 的笔记本
-- 一个 GTX 1080ti 的显卡
-- 装上pytorch的cpu和GPU版本
-
-
-
-### 项目目的
-
-使用pytorch实现RNN作诗，可以支持**首句续写**和**藏头诗**两个模式，并实现基本的音律和意境。
-
-
+## 代码实现
 
 ### 数据集
 
-整理好的numpy格式数据集，
+使用整理好的 **numpy** 格式的[开源数据集](http://pytorch-1252820389.cosbj.myqcloud.com/tang_199.pth)，其中包含唐诗共 57580 首 * 125 字，不足和超出 125 字的都已经被补全或者截断。
 
-http://pytorch-1252820389.cosbj.myqcloud.com/tang_199.pth
+```Python
+# 处理数据
+datas = np.load("/content/drive/MyDrive/AI-Poet/tang.npz", allow_pickle=True)
+data = datas['data']
+ix2word = datas['ix2word'].item()
+word2ix = datas['word2ix'].item()
+data = t.from_numpy(data)
+dataloader = DataLoader(data,
+                        batch_size=Config.batch_size,
+                        shuffle=True,
+                        num_workers=2)
+```
 
-其中包含唐诗57580首*125字，不足和多余125字的都被补充或者截断。
+**细节解释**
+1. data 是 numpy 数组，共 57580 首 * 125 字。
+2. word2ix 和 ix2word 都是字典类型，用于字符和序号的映射。
 
+### LSTM 循环神经网络
 
+LSTM 是一种特殊的 RNN，能够解决长序列训练过程中的梯度消失和梯度爆炸问题，相比于 RNN 只有一个传递状态 $h^t$，LSTM 有两个传输状态分别是 $c^t$ (cell state) 和 $h^t$ (hidden state)。
 
-### 网络定义
+其中对于传递下去的 $c^t$ 改变得较慢，通常输出的 $c^t$ 是上一个状态传过来的 $c^{t - 1}$ 加上一些数值，而 $h^t$ 则在不同节点下有较大区别。本模型便采用了 LSTM 模型进行训练。
 
-```python
+```Python
 class PoetryModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim):
         super(PoetryModel, self).__init__()
@@ -80,7 +68,7 @@ class PoetryModel(nn.Module):
 
     def forward(self, input, hidden=None):
         seq_len, batch_size = input.size()
-        #print(input.shape)
+        # print(input.shape)
         if hidden is None:
             h_0 = input.data.new(Config.num_layers, batch_size, self.hidden_dim).fill_(0).float()
             c_0 = input.data.new(Config.num_layers, batch_size, self.hidden_dim).fill_(0).float()
@@ -95,52 +83,29 @@ class PoetryModel(nn.Module):
         return output, hidden
 ```
 
+**细节解释**
 
+![LSTM](./img/LSTM.png)
 
-### 实现细节
+将数据集作为喂给模型的作为 _input_，先经过 _embedding_ 预处理得到 _embeds_ 层，然后经过 _LSTM_ 进行训练得到 _hidden_ 层和 _output_ 层，最后经过 _Linear_ 层判别，然后反向传播并循环训练即可。
 
-1. data是numpy数组，57580首*125字
-2. word2ix和ix2word都是字典类型，用于字符和序号的映射
-3. nn.Embedding层可以输入为long Tensor型的字的下标（int），输入为同样shape的词向量，下标换成了向量，其余形状不变。最重要的构造参数是num_embeddings, embedding_dim
-4. nn.LSTM主要构造参数input_size,hidden_size和num_layers，其中input_size其实就是词向量的维度，forward时输入为input和（h0,c0）,其中input为(seq_len,batch_size,input_size)，h0和c0是(num_layers $*$ num_directions, batch, hidden_size)，而forward的输出为output和(hn,cn)，一般后面一个就叫做hidden，output为(seq_len, batch, num_directions $*$ hidden_size)
-5. 在本网络中，从前往后总共经历了这么几个网络，其向量变化如下：
-    - input:(seq_len,batch_size)
-    - 经过embedding层，embeddings(input)
-    - embeds:(seq_len,batch_size,embedding_size)
-    - 经过LSTM，lstm(embeds, (h_0, c_0))，输出output，hidden
-    - output：(seq_len, batch, num_directions $*$ hidden_size)
-    - output view为(seq_len $*$ batch, num_directions $*$ hidden_size)
-    - 进过Linear层判别
-    - output：(seq_len $*$ batch, vocab_size)
-6. 具体训练时的实现方法：
-    - 输入的input为(batch_size,seq_len)
-    - data_ = data_.long().transpose(1,0).contiguous()将数据转置并且复制了一份，成了(seq_len,batch_size)
-    - 通过input_,target = data_[:-1,:],data_[1:,:]将每句话分为前n-1个字作为真正的输入，后n-1个字作为label，size都是(seq_len-1,batch_size)
-    - 经过网络，得出output：((seq_len-1) $*$ batch, vocab_size)
-    - 通过target.view(-1)将target变成((seq_len-1) $*$ batch)
-    - 这里的target不需要是一个one-hot向量，因crossEntropy不需要，直接是下标即可
-    - 然后反向传播即可
-7. 生成诗句的方法：
-    - 首字为<START>，首个hidden自动为空
-    - 如果有前缀风格，通过前缀生成hidden
-    - 在首句内部时，不使用output，仅仅不断前进得到hidden，直到首句结尾。
-    - 进入生成模式后，实际上每次调用model都生成一个字，逐渐生成前n句话。
-    - 藏头诗同理，只是在头的部分将诗句首字换掉
+## 运行展示
+
+**使用方法**
+使用 Colab 打开项目，在 _AI-Poet.ipynb_ 中 _User Test_ 部分点击运行，根据提示输入 **1（首句生成）**或者 **2（藏头诗）**来选择生成诗句模式。
+若是**首句生成**模式，则需再输入诗歌首句。若是**藏头诗**模式，则需输入诗歌藏头部分。
+
+**成果展示**
+
+## 项目总结
+
+在一个学期的《人工智能》选修课中，我学习到了诸如机器学习、深度学习、自然语言处理等多种人工智能相关技术，也逐步了解到自动驾驶、智能推荐等人工智能的广大应用前景，感触颇深。因为我自身是软件工程专业高年级学生（大三），且之前对机器学习和深度学习等技术略有接触，因此这次课程大作业选择了单人组队，这也大大增加了我许多选题和解题的灵活性。
+
+在我看来，AI 的各种技术目前都还在起步阶段，相对成熟的推荐系统也仅仅是通过有限的用户浏览历史来进行简单的预测，而大数据时代的到来不仅意味着个人数据的广泛搜集和使用，更为计算机的算力提升和相应模型复杂度增加提供了契机。在未来，AI 必然会更进一步，做的更好，我也希望能够参与其中。
+
+感谢《人工智能》课程 孔令和老师、许岩岩老师的精彩授课和悉心指导，段勇帅助教也为我提供了许多帮助。
 
 
 
 
 
-### 使用方法
-
-```python
-python main.py
-```
-
-可以进行训练，result中含有训练过程数据。
-
-```python
-python test.py
-```
-
-可以测试生成效果。
