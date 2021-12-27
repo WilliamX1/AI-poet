@@ -21,11 +21,42 @@
 
 最初试图使用 _MacBook Pro 2017_ 进行训练，然而因为是因特尔显卡没办法直接使用 _cuda_，所以只能使用 CPU 导致训练速度极慢。经过粗略计算，跑完一遍模型需要约 15 天时间，因此不在本机跑模型。
 
-之后尝试过阿里云租借服务器、百度飞桨平台等，但都觉得过于复杂。最终选用谷歌的 Colab 平台进行训练，所分配到的 GPU 为 _Tesla P100_，训练时间约为 3 小时。
+之后尝试过阿里云租借服务器、百度飞桨平台等，但都觉得过于复杂。最终选用谷歌的 Colab 平台进行训练，所分配到的 GPU 为 _Tesla P100_，训练一次模型时间约为 3 小时。
 
 ![GPU](./img/GPU.png)
 
 ## 代码实现
+
+### 模型接口
+主要关注 LSTM 层数，epoch 和 batch_size 参数。
+
+**LSTM 层数**
+共三层，分别为 embedding 层、lstm 层和 linear 层。
+
+**epoch**
+向前和向后传播中所有批次的单次训练迭代，即训练过程中全部样本数据将被“轮”多少次。
+
+**batch_size**
+基本上现在的梯度下降都是基于 mini-batch 的，每次训练使用 batch_size 个数据进行参数寻优，一批中的数据共同决定了本次梯度的方向。
+
+
+```python
+class Config(object):
+    num_layers = 3  # LSTM层数
+		...
+    lr = 1e-3
+    weight_decay = 1e-4
+    use_gpu = True
+    epoch = 30
+    batch_size = 25
+    maxlen = 125  # 超过这个长度的之后字被丢弃，小于这个长度的在前面补空格
+    plot_every = 200  # 每20个batch 可视化一次
+    max_gen_len = 200  # 生成诗歌最长长度
+    ...
+    embedding_dim = 256
+    hidden_dim = 512
+    ...
+```
 
 ### 数据集
 
@@ -89,7 +120,135 @@ class PoetryModel(nn.Module):
 
 将数据集作为喂给模型的作为 _input_，先经过 _embedding_ 预处理得到 _embeds_ 层，然后经过 _LSTM_ 进行训练得到 _hidden_ 层和 _output_ 层，最后经过 _Linear_ 层判别，然后反向传播并循环训练即可。
 
+### 训练方法
+使用 GPU 进行训练，每次将数据输入进 LSTM 网络进行前向传播训练，然后使用误差反向传播进行修正，每隔一定数据量进行一次可视化，不断迭代更新。
+```python
+loss_data = []
+# 进行训练并画图
+def train():
+  f = open(Config.result_path, 'w')
+  for epoch in range(basic_start, Config.epoch):
+      loss_meter.reset()
+      for li, data_ in tqdm.tqdm(enumerate(dataloader)):
+          # 将数据转置并复制一份
+          data_ = data_.long().transpose(1, 0).contiguous()
+          # 注意这里，也转移到了计算设备上
+          data_ = data_.to(device)
+          Configimizer.zero_grad()
+          # n个句子，前n-1句作为inout，后n-1句作为label，二者一一对应
+          # 经过 LSTM 网络进行前向传播
+          input_, target = data_[:-1, :], data_[1:, :]
+          output, _ = model(input_)
+          # 误差反向传播
+          loss = criterion(output, target.view(-1))
+          loss.backward()
+          Configimizer.step()
+          loss_meter.add(loss.item())
+          # 存储 loss 数据，方便之后画图
+          loss_data.append(loss)
+          # 进行可视化
+          if (1 + li) % Config.plot_every == 0:
+              print("训练损失为%s\n" % (str(loss_meter.mean)))
+              ...
+train()
+```
+
+### 诗句生成
+
+**首句生成模式**
+
+优先使用风格前缀生成隐藏层，并结合用户输入的首句喂给预训练模型生成下一句，再使用生成的下一句作为下一次迭代的输入，不断迭代直至达到最大生成字数或遇到终止符 \<EOP\> 为止。
+
+```python
+# 给定首句生成诗歌
+def generate(model, start_words, ix2word, word2ix, prefix_words=None):
+		...   
+    # 若有风格前缀，则先用风格前缀生成hidden
+    if prefix_words:
+        for word in prefix_words:
+            output, hidden = model(input, hidden)
+            input = input.data.new([word2ix[word]]).view(1, 1)
+
+    # 开始真正生成诗句，如果没有使用风格前缀，则hidden = None，input = <START>
+    # 否则，input就是风格前缀的最后一个词语，hidden也是生成出来的
+    for i in range(Config.max_gen_len):
+        output, hidden = model(input, hidden)
+        if i < start_words_len:
+            ...
+            input = input.data.new([word2ix[w]]).view(1, 1)
+        else:
+            ...
+            input = input.data.new([top_index]).view(1, 1)
+        if w == '<EOP>':
+            del results[-1]
+            break
+    return results
+```
+
+**藏头诗模式**
+
+优先使用风格前缀生成隐藏层，并结合用户输入每次喂给模型一个字作为开头并续写，迭代更新至用户输入用完为止。
+
+```python
+# 生成藏头诗
+def gen_acrostic(model, start_words, ix2word, word2ix, prefix_words=None):
+    input = (t.Tensor([word2ix['<START>']]).view(1, 1).long())
+		...
+    # 存在风格前缀，则生成hidden
+    if prefix_words:
+        for word in prefix_words:
+            output, hidden = model(input, hidden)
+            input = (input.data.new([word2ix[word]])).view(1, 1)
+
+    # 开始生成诗句
+    for i in range(Config.max_gen_len):
+        output, hidden = model(input, hidden)
+        top_index = output.data[0].topk(1)[1][0].item()
+        w = ix2word[top_index]
+        # 说明上个字是句末
+        if pre_word in {'。', '，', '?', '！', '<START>'}:
+            ...
+        else:
+            input = (input.data.new([top_index])).view(1, 1)
+        result.append(w)
+        pre_word = w
+    return result
+print("Define usage successfully\n")
+```
 ## 运行展示
+
+```python
+...
+def userTest():
+    print("正在初始化......")
+    datas = np.load('/'.join([Config.data_path, Config.pickle_path]), allow_pickle=True)
+    data = datas['data']
+    ix2word = datas['ix2word'].item()
+    word2ix = datas['word2ix'].item()
+    model = PoetryModel(len(ix2word), Config.embedding_dim, Config.hidden_dim)
+    model.load_state_dict(t.load(Config.model_path, 'cpu'))
+    if Config.use_gpu:
+        model.to(t.device('cuda'))
+    print("初始化完成！\n")
+    while True:
+        print("欢迎使用唐诗生成器，\n"
+              "输入1 进入首句生成模式\n"
+              "输入2 进入藏头诗生成模式\n")
+        mode = int(input())
+        if mode == 1:
+            print("请输入您想要的诗歌首句，可以是五言或七言")
+            start_words = str(input())
+            gen_poetry = ''.join(generate(model, start_words, ix2word, word2ix))
+            print("生成的诗句如下：%s\n" % (gen_poetry))
+            f.write("首句生成模式: %s\n %s\n" % (start_words, gen_poetry))
+        elif mode == 2:
+            print("请输入您想要的诗歌藏头部分，不超过16个字，最好是偶数")
+            start_words = str(input())
+            gen_poetry = ''.join(gen_acrostic(model, start_words, ix2word, word2ix))
+            print("生成的诗句如下：%s\n" % (gen_poetry))
+            f.write("藏头诗模式: %s\n %s\n" % (start_words, gen_poetry))
+userTest()
+```
 
 **使用方法**
 使用 Colab 打开项目，在 _AI-Poet.ipynb_ 中 _User Test_ 部分点击运行，根据提示输入 **1（首句生成）**或者 **2（藏头诗）**来选择生成诗句模式。
